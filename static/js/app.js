@@ -1,3 +1,6 @@
+// 载入日志，确认脚本是否被浏览器执行
+console.log('[envmgr] app.js loaded');
+
 class EnvironmentManager {
     constructor() {
         this.envVars = []; // 现在是对象数组而不是map
@@ -6,17 +9,46 @@ class EnvironmentManager {
     }
 
     async init() {
-        await this.loadEnvVars();
+        // 先注册事件监听，保证页面有交互
         this.setupEventListeners();
+        // 再加载数据，避免因请求阻塞导致页面“无响应”
+        console.log('[envmgr] init -> loading env vars');
+        await this.loadEnvVars();
     }
 
     async loadEnvVars() {
         try {
+            console.log('[envmgr] fetch /api/env ...');
             const response = await fetch('/api/env');
             if (!response.ok) throw new Error('Failed to load environment variables');
             this.envVars = await response.json();
-            this.renderTable();
+
+            // 先更新计数
             this.updateVariableCounts();
+            console.log('[envmgr] fetch /api/env done, count =', this.envVars.length);
+
+            // 根据数据情况自动切换到有数据的标签
+            const hasUser = this.envVars.some(envVar => envVar.source === 'user');
+            const hasSystem = this.envVars.some(envVar => envVar.source === 'system');
+            let preferredTab = this.currentTab;
+            if (preferredTab === 'user' && !hasUser && hasSystem) {
+                preferredTab = 'system';
+            }
+            if (preferredTab === 'system' && !hasSystem && hasUser) {
+                preferredTab = 'user';
+            }
+            if (preferredTab !== this.currentTab) {
+                this.currentTab = preferredTab;
+                // 同步tab样式
+                document.querySelectorAll('.tab-button').forEach(button => {
+                    button.classList.remove('active');
+                    if (button.dataset.tab === preferredTab) {
+                        button.classList.add('active');
+                    }
+                });
+            }
+
+            this.renderTable();
         } catch (error) {
             console.error('加载环境变量时出错:', error);
             alert('加载环境变量时出错');
@@ -128,8 +160,8 @@ class EnvironmentManager {
             tbody.appendChild(row);
         });
 
-        // Update variable count for current tab
-        document.getElementById('varCount').textContent = filteredVars.length;
+        // Header显示总数（而非当前筛选数量）
+        document.getElementById('varCount').textContent = this.envVars.length;
     }
 
 
@@ -204,18 +236,32 @@ class EnvironmentManager {
                     <label for="varValue" class="block text-sm font-medium text-gray-700 mb-1">变量值</label>
                     <input type="text" id="varValue" placeholder="请输入变量值" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
                 </div>
+                <div>
+                    <label for="varComment" class="block text-sm font-medium text-gray-700 mb-1">备注 <span class="text-gray-500">(可选)</span></label>
+                    <textarea id="varComment" rows="2" placeholder="添加备注信息..." class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm resize-none"></textarea>
+                    <div class="mt-1">
+                        <span class="text-xs text-gray-500">备注信息将保存在本地，不会影响环境变量</span>
+                    </div>
+                </div>
                 <div class="flex justify-end space-x-3 pt-4">
                     <button onclick="envManager.closeModal()" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 transition-colors duration-200">取消</button>
-                    <button onclick="envManager.addVariable()" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors duration-200">添加变量</button>
+                    <button id="btnAddConfirm" onclick="envManager.addVariable()" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors duration-200">添加变量</button>
                 </div>
             </div>
         `;
         this.showModal(content, '添加环境变量');
+
+        // 兜底绑定，防止内联 onclick 被环境阻止
+        const addBtn = document.getElementById('btnAddConfirm');
+        if (addBtn) {
+            addBtn.addEventListener('click', () => this.addVariable(), { once: true });
+        }
     }
 
     async addVariable() {
         const name = document.getElementById('varName').value.trim();
         const value = document.getElementById('varValue').value.trim();
+        const comment = document.getElementById('varComment').value.trim();
         
         if (!name || !value) {
             alert('请输入变量名和变量值');
@@ -223,6 +269,7 @@ class EnvironmentManager {
         }
         
         try {
+            // 创建环境变量
             const response = await fetch('/api/env', {
                 method: 'POST',
                 headers: {
@@ -233,6 +280,21 @@ class EnvironmentManager {
             
             if (!response.ok) throw new Error('Failed to add variable');
             
+            // 如果有备注，保存备注到服务器
+            if (comment) {
+                const commentResponse = await fetch('/api/comments/save', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ name, comment }),
+                });
+                
+                if (!commentResponse.ok) {
+                    console.warn('保存备注到服务器失败');
+                }
+            }
+            
             this.closeModal();
             await this.loadEnvVars();
         } catch (error) {
@@ -242,6 +304,9 @@ class EnvironmentManager {
     }
 
     showInlineEditDialog(name, value) {
+        const envVar = this.envVars.find(v => v.name === name);
+        const currentComment = envVar ? (envVar.comment || '') : '';
+        
         const content = `
             <div class="space-y-4">
                 <div>
@@ -257,16 +322,32 @@ class EnvironmentManager {
                     <label for="varValue" class="block text-sm font-medium text-gray-700 mb-1">变量值</label>
                     <input type="text" id="varValue" value="${value}" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
                 </div>
+                <div>
+                    <label for="varComment" class="block text-sm font-medium text-gray-700 mb-1">备注 <span class="text-gray-500">(可选)</span></label>
+                    <textarea id="varComment" rows="2" placeholder="添加备注信息..." class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm resize-none">${currentComment}</textarea>
+                    <div class="mt-1">
+                        <span class="text-xs text-gray-500">备注信息将保存在本地，不会影响环境变量</span>
+                    </div>
+                </div>
                 <div class="flex justify-end space-x-3 pt-4">
                     <button onclick="envManager.closeModal()" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 transition-colors duration-200">取消</button>
-                    <button onclick="envManager.editVariable('${name}')" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors duration-200">保存修改</button>
+                    <button id="btnEditConfirm" onclick="envManager.editVariable('${name}')" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors duration-200">保存修改</button>
                 </div>
             </div>
         `;
         this.showModal(content, '编辑环境变量');
+
+        // 兜底绑定，防止内联 onclick 被环境阻止
+        const editBtn = document.getElementById('btnEditConfirm');
+        if (editBtn) {
+            editBtn.addEventListener('click', () => this.editVariable(name), { once: true });
+        }
     }
 
     showValueDetails(name, value, source) {
+        const envVar = this.envVars.find(v => v.name === name);
+        const currentComment = envVar ? (envVar.comment || '') : '';
+        
         const content = `
             <div class="space-y-4">
                 <div>
@@ -300,6 +381,15 @@ class EnvironmentManager {
                             <span class="text-xs text-gray-500">长度: ${value.length} 字符</span>
                         </div>
                     </div>
+                </div>
+                ${currentComment ? `
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">备注</label>
+                    <div class="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50 text-gray-700 text-sm whitespace-pre-wrap">${currentComment}</div>
+                </div>
+                ` : ''}
+                <div class="flex justify-end pt-4">
+                    <button onclick="envManager.closeModal()" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 transition-colors duration-200">关闭</button>
                 </div>
             </div>
         `;
@@ -371,16 +461,23 @@ class EnvironmentManager {
                 </div>
                 <div class="flex justify-end space-x-3 pt-4">
                     <button onclick="envManager.closeModal()" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 transition-colors duration-200">取消</button>
-                    <button onclick="envManager.deleteVariable('${name}')" class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors duration-200">删除变量</button>
+                    <button id="btnDeleteConfirm" onclick="envManager.deleteVariable('${name}')" class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors duration-200">删除变量</button>
                 </div>
             </div>
         `;
         this.showModal(content, '删除环境变量');
+
+        // 兜底绑定，防止内联 onclick 被环境阻止
+        const delBtn = document.getElementById('btnDeleteConfirm');
+        if (delBtn) {
+            delBtn.addEventListener('click', () => this.deleteVariable(name), { once: true });
+        }
     }
 
     async editVariable(oldName) {
         const newName = document.getElementById('varName').value.trim();
         const value = document.getElementById('varValue').value.trim();
+        const comment = document.getElementById('varComment').value.trim();
         
         if (!newName || !value) {
             alert('请输入变量名和变量值');
@@ -418,6 +515,28 @@ class EnvironmentManager {
                 });
                 
                 if (!createResponse.ok) throw new Error('Failed to create new variable');
+                
+                // 如果变量名发生变化，清理旧变量的备注
+                await fetch('/api/comments/save', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ name: oldName, comment: '' }),
+                });
+            }
+            
+            // Save comment to server
+            const commentResponse = await fetch('/api/comments/save', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ name: newName, comment }),
+            });
+            
+            if (!commentResponse.ok) {
+                console.warn('保存备注到服务器失败');
             }
             
             this.closeModal();
@@ -435,6 +554,15 @@ class EnvironmentManager {
             });
             
             if (!response.ok) throw new Error('Failed to delete variable');
+            
+            // 清理服务器备注
+            await fetch('/api/comments/save', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ name: key, comment: '' }),
+            });
             
             this.closeModal();
             await this.loadEnvVars();
@@ -550,7 +678,19 @@ class EnvironmentManager {
             alert('应用配置时出错');
         }
     }
+
 }
 
-// Initialize the application
-const envManager = new EnvironmentManager();
+// Initialize the application (attach to window for inline handlers)
+if (!window.envManager) {
+    console.log('[envmgr] bootstrap instance');
+    window.envManager = new EnvironmentManager();
+}
+
+// 兜底：若上面因未知原因未执行，等待DOM就绪再次尝试
+document.addEventListener('DOMContentLoaded', () => {
+    if (!window.envManager) {
+        console.log('[envmgr] DOMContentLoaded bootstrap instance');
+        window.envManager = new EnvironmentManager();
+    }
+});

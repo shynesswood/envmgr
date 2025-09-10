@@ -4,7 +4,6 @@ import (
     "encoding/json"
     "fmt"
     "os"
-    "path/filepath"
 )
 
 type Profile struct {
@@ -13,8 +12,7 @@ type Profile struct {
 }
 
 func profileFile() string {
-    appdata := os.Getenv("APPDATA")
-    return filepath.Join(appdata, "envmgr_profiles.json")
+    return "envmgr_profiles.json"
 }
 
 func LoadProfiles() ([]Profile, error) {
