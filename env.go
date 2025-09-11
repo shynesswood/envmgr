@@ -9,15 +9,16 @@ import (
 )
 
 type EnvVar struct {
-	Name    string `json:"name"`
-	Value   string `json:"value"`
-	Source  string `json:"source"` // "system" or "user"
-	Comment string `json:"comment"`
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Source string `json:"source"` // "system" or "user"
+	Remark string `json:"remark"`
 }
 
+// 获取系统及当前用户的环境变量
 func GetAllEnvVars() []EnvVar {
-	systemVars := map[string]string{}
-	userVars := map[string]string{}
+
+	result := make([]EnvVar, 0)
 
 	// 系统环境变量
 	if k, err := registry.OpenKey(registry.LOCAL_MACHINE,
@@ -26,7 +27,11 @@ func GetAllEnvVars() []EnvVar {
 		if names, err := k.ReadValueNames(0); err == nil {
 			for _, n := range names {
 				if v, _, err := k.GetStringValue(n); err == nil {
-					systemVars[n] = v
+					result = append(result, EnvVar{
+						Name:   n,
+						Value:  v,
+						Source: "system",
+					})
 				}
 			}
 		}
@@ -39,59 +44,38 @@ func GetAllEnvVars() []EnvVar {
 		if names, err := k.ReadValueNames(0); err == nil {
 			for _, n := range names {
 				if v, _, err := k.GetStringValue(n); err == nil {
-					userVars[n] = v
+					result = append(result, EnvVar{
+						Name:   n,
+						Value:  v,
+						Source: "user",
+					})
 				}
 			}
-		}
-	}
-
-	// 先加载所有备注，如果文件不存在或出错也不会影响环境变量的显示
-	comments := GetAllEnvVarComments()
-	if comments == nil {
-		comments = make(map[string]string)
-	}
-
-	// 合并结果，确保所有环境变量都能显示（备注可以为空）
-	result := make([]EnvVar, 0)
-	addedVars := make(map[string]bool) // 用于避免重复添加
-
-	// 添加系统变量
-	for name, value := range systemVars {
-		// 检查是否有同名的用户变量，如果有，优先使用用户变量
-		if userValue, userExists := userVars[name]; userExists {
-			result = append(result, EnvVar{
-				Name:    name,
-				Value:   userValue,
-				Source:  "user",
-				Comment: comments[name], // 备注可能为空，这没问题
-			})
-		} else {
-			result = append(result, EnvVar{
-				Name:    name,
-				Value:   value,
-				Source:  "system",
-				Comment: comments[name], // 备注可能为空，这没问题
-			})
-		}
-		addedVars[name] = true
-	}
-
-	// 添加仅存在于用户环境中的变量
-	for name, value := range userVars {
-		if !addedVars[name] {
-			result = append(result, EnvVar{
-				Name:    name,
-				Value:   value,
-				Source:  "user",
-				Comment: comments[name], // 备注可能为空，这没问题
-			})
 		}
 	}
 
 	return result
 }
 
+// 更新用户环境变量
 func SetUserEnvVar(name, value string) error {
+	if err := setUserEnvVar(name, value); err != nil {
+		return err
+	}
+	return broadcastChange()
+}
+
+// 批量更新用户环境变量
+func BatchSetUserEnvVar(envs []EnvVar) error {
+	for _, env := range envs {
+		if err := setUserEnvVar(env.Name, env.Value); err != nil {
+			return err
+		}
+	}
+	return broadcastChange()
+}
+
+func setUserEnvVar(name, value string) error {
 	k, _, err := registry.CreateKey(registry.CURRENT_USER, `Environment`, registry.SET_VALUE)
 	if err != nil {
 		return err
@@ -100,9 +84,10 @@ func SetUserEnvVar(name, value string) error {
 	if err := k.SetStringValue(name, value); err != nil {
 		return err
 	}
-	return broadcastChange()
+	return nil
 }
 
+// 删除用户环境变量
 func DeleteUserEnvVar(name string) error {
 	k, err := registry.OpenKey(registry.CURRENT_USER, `Environment`, registry.SET_VALUE)
 	if err != nil {
@@ -110,18 +95,69 @@ func DeleteUserEnvVar(name string) error {
 	}
 	defer k.Close()
 	if err := k.DeleteValue(name); err != nil {
+		if serr, ok := err.(*syscall.Errno); ok {
+			if *serr == syscall.ENOENT {
+				// 检查错误是否是 "文件未找到" (ERROR_FILE_NOT_FOUND)
+				// 如果是，则认为操作成功，因为环境变量本身就不存在或已被成功删除。
+				return broadcastChange()
+			}
+		}
 		return err
 	}
 	return broadcastChange()
 }
 
-// EnvVarsToMap 将新的EnvVar结构转换为旧的map格式，用于向后兼容
-func EnvVarsToMap(envVars []EnvVar) map[string]string {
-	result := make(map[string]string)
-	for _, envVar := range envVars {
-		result[envVar.Name] = envVar.Value
+// 更新系统环境变量
+func SetSystemEnvVar(name, value string) error {
+	if err := setSystemEnvVar(name, value); err != nil {
+		return err
 	}
-	return result
+	return broadcastChange()
+}
+
+// 批量更新系统环境变量
+func BatchSetSystemEnvVar(envs []EnvVar) error {
+	if len(envs) == 0 {
+		return nil
+	}
+	for _, env := range envs {
+		if err := setSystemEnvVar(env.Name, env.Value); err != nil {
+			return err
+		}
+	}
+	return broadcastChange()
+}
+
+func setSystemEnvVar(name, value string) error {
+	k, _, err := registry.CreateKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\Session Manager\Environment`, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	if err := k.SetStringValue(name, value); err != nil {
+		return err
+	}
+	return nil
+}
+
+// 删除系统环境变量
+func DeleteSystemEnvVar(name string) error {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\Session Manager\Environment`, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	if err := k.DeleteValue(name); err != nil {
+		if serr, ok := err.(*syscall.Errno); ok {
+			if *serr == syscall.ENOENT {
+				// 检查错误是否是 "文件未找到" (ERROR_FILE_NOT_FOUND)
+				// 如果是，则认为操作成功，因为环境变量本身就不存在或已被成功删除。
+				return broadcastChange()
+			}
+		}
+		return err
+	}
+	return broadcastChange()
 }
 
 func broadcastChange() error {
@@ -145,4 +181,14 @@ func broadcastChange() error {
 		return fmt.Errorf("SendMessageTimeout failed: %v", err)
 	}
 	return nil
+}
+
+// IsAdmin 尝试以写权限打开系统环境变量注册表分支来判断是否具备管理员权限
+func IsAdmin() bool {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\Session Manager\Environment`, registry.SET_VALUE)
+	if err == nil {
+		k.Close()
+		return true
+	}
+	return false
 }

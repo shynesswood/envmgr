@@ -6,35 +6,121 @@
     <title>环境变量管理器</title>
     <script src="https://cdn.tailwindcss.com"></script>
   <style>
+    :root {
+      --app-bg-start: #f7f7fb;
+      --app-bg-end: #eef1f6;
+      --app-ring: #e5e7eb;
+      --app-card-shadow: 0 10px 30px rgba(17, 24, 39, .06);
+    }
+    /* Global background */
+    body {
+      background: radial-gradient(1200px 600px at 10% -10%, #ffffff 0%, var(--app-bg-start) 40%, var(--app-bg-end) 100%);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    /* Card */
+    .app-card {
+      border-radius: 16px;
+      box-shadow: var(--app-card-shadow);
+      border: 1px solid var(--app-ring);
+      background: #fff;
+    }
     .tab-button:not(.active) {
       border-color: transparent;
     }
     .tab-button:not(.active):hover {
       border-color: #e5e7eb;
     }
+    /* Lightweight, scoped styles to beautify top menu */
+    .menu-switch {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 12px;
+      padding: 4px;
+      background: linear-gradient(180deg, #f7f7f8 0%, #f0f2f5 100%);
+      box-shadow: inset 0 0 0 1px #e5e7eb;
+    }
+    .menu-btn {
+      padding: 8px 14px;
+      border-radius: 10px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      color: #4b5563;
+      transition: background-color .2s ease, color .2s ease, box-shadow .2s ease;
+    }
+    .menu-btn:hover {
+      background: rgba(255,255,255,0.9);
+      color: #111827;
+    }
+    .menu-btn.active {
+      background: #ffffff;
+      color: #111827;
+      box-shadow: 0 1px 2px rgba(0,0,0,.06), inset 0 0 0 1px #e5e7eb;
+    }
+    /* Inputs & selects inside card */
+    .app-card input,
+    .app-card select,
+    .app-card textarea {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: rgba(255,255,255,.04);
+      color: var(--text);
+      transition: box-shadow .15s ease, border-color .15s ease, background-color .15s ease;
+    }
+    .app-card input:focus,
+    .app-card select:focus,
+    .app-card textarea:focus {
+      outline: none;
+      box-shadow: 0 0 0 3px rgba(99,102,241,.35);
+      background: rgba(255,255,255,.06);
+    }
+    /* Buttons (subtle elevation) */
+    .app-card button {
+      transition: transform .05s ease, box-shadow .15s ease, background-color .15s ease;
+    }
+    .app-card button:not(.close):active {
+      transform: translateY(0.5px);
+    }
+    /* Tables */
+    .app-table thead th {
+      background: #f8fafc;
+      font-weight: 600;
+      color: #64748b;
+    }
+    .app-table tbody tr:nth-child(odd) { background: #fcfdff; }
+    .app-table tbody tr:hover { background: #f6faff; }
+    /* Scrollbars for modal and long lists */
+    #modalContent, .env-list { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+    #modalContent::-webkit-scrollbar, .env-list::-webkit-scrollbar { height: 8px; width: 8px; }
+    #modalContent::-webkit-scrollbar-thumb, .env-list::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
   </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
     <div class="container mx-auto px-4 py-8 max-w-6xl">
-        <div class="bg-white rounded-lg shadow-lg p-6">
+        <div class="app-card p-6">
             <div class="flex items-center justify-between mb-8">
-                <h1 class="text-3xl font-bold text-gray-800">环境变量管理器</h1>
-                <div class="text-sm text-gray-500">
+                <h1 class="text-3xl font-bold">环境变量管理器</h1>
+                <div class="text-sm text-gray-300">
                     已加载 <span id="varCount" class="font-medium">0</span> 个变量
                 </div>
             </div>
+            <!-- 顶部一级菜单 -->
+            <div class="menu-switch mb-4">
+                <button id="menuEnv" class="menu-btn active" type="button">环境变量</button>
+                <button id="menuGroup" class="menu-btn" type="button">环境分组</button>
+            </div>
             
-            <div class="flex flex-wrap gap-3 mb-6">
+            <div id="envControls" class="flex flex-wrap gap-3 mb-6">
                 <button id="addBtn" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200 flex items-center gap-2">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
                     </svg>
                     添加变量
                 </button>
-              </div>
+            </div>
 
             <!-- Tab Navigation -->
-            <div class="border-b border-gray-200 mb-6">
+            <div id="envTabs" class="border-b border-gray-200 mb-6">
                 <nav class="-mb-px flex space-x-8" aria-label="Tabs">
                     <button id="userTab" class="tab-button active border-green-500 text-green-600 hover:text-green-700 whitespace-nowrap py-2 px-1 border-b-2 font-medium text-sm" data-tab="user">
                         用户变量
@@ -45,10 +131,15 @@
                         <span id="systemVarCount" class="ml-2 py-0.5 px-2 rounded-full text-xs bg-blue-100 text-blue-800">0</span>
                     </button>
                 </nav>
+                <div class="mt-2 text-xs text-gray-500">
+                    <span id="systemWarning" class="hidden text-orange-600">
+                        ⚠️ 修改系统变量需要管理员权限
+                    </span>
+                </div>
             </div>
 
-            <div class="overflow-x-auto bg-white rounded-lg border border-gray-200">
-                <table class="min-w-full divide-y divide-gray-200">
+            <div id="envContainer" class="overflow-x-auto bg-white rounded-lg border border-gray-200">
+                <table class="min-w-full divide-y divide-gray-200 app-table">
                     <thead class="bg-gray-50">
                         <tr>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/4">变量名称</th>
@@ -60,12 +151,36 @@
                     </tbody>
                 </table>
             </div>
+
+            <!-- 环境分组 Section -->
+            <div id="groupSection" class="hidden">
+                <div class="flex flex-wrap gap-3 mb-6">
+                    <button id="addGroupBtn" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200 flex items-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                        </svg>
+                        新建分组
+                    </button>
+                </div>
+                <div class="overflow-x-auto bg-white rounded-lg border border-gray-200">
+                    <table class="min-w-full divide-y divide-gray-200 app-table">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/4">分组名称</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/2">备注</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/4">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="groupTableBody" class="bg-white divide-y divide-gray-200"></tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
 
     <!-- Modal dialogs -->
     <div id="modal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
-        <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 transform transition-all">
+        <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 transform transition-all">
             <div class="flex items-center justify-between p-6 border-b border-gray-200">
                 <h3 id="modalTitle" class="text-lg font-semibold text-gray-900"></h3>
                 <button class="close text-gray-400 hover:text-gray-600 transition-colors">
@@ -78,6 +193,20 @@
             </div>
         </div>
     </div>
+
+    <!-- Global Loading Overlay -->
+    <div id="globalLoading" class="fixed inset-0 bg-black bg-opacity-30 hidden items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow px-4 py-3 flex items-center space-x-3">
+            <svg class="w-5 h-5 text-blue-600 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+            </svg>
+            <span class="text-gray-700 text-sm">正在加载...</span>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toastContainer" class="fixed top-4 right-4 z-50 space-y-2"></div>
 
     <script src="/static/js/app.js"></script>
 </body>
